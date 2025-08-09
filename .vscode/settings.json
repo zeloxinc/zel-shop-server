@@ -1,0 +1,45 @@
+{
+    "sqltools.connections": [
+        {
+            "mysqlOptions": {
+                "authProtocol": "xprotocol",
+                "enableSsl": "Disabled"
+            },
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 33060,
+            "driver": "MySQL",
+            "name": "mysql",
+            "database": "urban_cruiser",
+            "username": "root",
+            "connectionTimeout": 30,
+            "password": "sumsung101"
+        },
+        {
+            "mysqlOptions": {
+                "authProtocol": "xprotocol",
+                "enableSsl": "Disabled"
+            },
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 33060,
+            "driver": "MySQL",
+            "name": "mysql",
+            "database": "bank",
+            "username": "root",
+            "connectionTimeout": 30,
+            "password": "sumsung101"
+        },
+        {
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "postgreSQL",
+            "database": "zel-shop-db",
+            "username": "postgres",
+            "password": "sumsung101",
+            "connectionTimeout": 30
+        }
+    ]
+}
