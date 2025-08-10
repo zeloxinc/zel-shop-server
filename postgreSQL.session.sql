@@ -209,3 +209,26 @@ WHERE pt.shop_id = 1;
 
 -- Check sales
 SELECT * FROM sales WHERE shop_id = 1;
+
+
+
+
+
+
+-- Remove role column
+ALTER TABLE shopkeepers DROP COLUMN IF EXISTS role;
+
+-- Add keeper_code (e.g., MP2025A8X9Z)
+ALTER TABLE shopkeepers ADD COLUMN keeper_code TEXT UNIQUE NOT NULL DEFAULT (
+  'SK' || 
+  EXTRACT(YEAR FROM NOW())::TEXT || 
+  UPPER(SUBSTRING(MD5(RANDOM()::TEXT) FROM 1 FOR 5))
+);
+
+-- Update default
+ALTER TABLE shopkeepers ALTER COLUMN keeper_code DROP DEFAULT;
+-- We'll generate it in code instead
+
+
+
+SELECT * FROM shopkeepers

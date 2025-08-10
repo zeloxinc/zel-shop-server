@@ -4,9 +4,12 @@ const router = express.Router();
 const pool = require('../models/db');
 const bcrypt = require('bcrypt');
 const { v4: uuidv4 } = require('uuid');
+const { authenticateShop } = require('../middleware/auth')
 
-// POST: Signup (create shopkeeper)
-router.post('/signup', async (req, res) => {
+// routes/shopkeepers.js
+const { generateKeeperCode } = require('../utils/generatedId');
+
+router.post('/signup', authenticateShop, async (req, res) => {
   const { first_name, last_name, phone, email, password } = req.body;
 
   if (!first_name || !phone || !password) {
@@ -15,26 +18,27 @@ router.post('/signup', async (req, res) => {
 
   const hashedPassword = await bcrypt.hash(password, 10);
   const activationCode = uuidv4();
+  const keeperCode = generateKeeperCode(); // e.g., SK25A7X9C2M
 
   try {
     await pool.query('BEGIN');
 
-    const result = await pool.query(
+    const result = await pool.query(  
       `INSERT INTO shopkeepers 
-         (first_name, last_name, phone, email, password_hash, activation_code, is_active, is_verified)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING keeper_id, first_name, phone, email`,
-      [first_name, last_name, phone, email, hashedPassword, activationCode, false, false]
+         (keeper_code, first_name, last_name, phone, email, password_hash, activation_code, is_active, is_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING keeper_code, first_name, phone, email`,
+      [keeperCode, first_name, last_name, phone, email, hashedPassword, activationCode, false, false]
     );
 
     await pool.query('COMMIT');
 
-    // 📲 In real app: send activationCode via SMS/email
     console.log(`Activation code for ${phone}: ${activationCode}`);
 
     res.status(201).json({
       message: 'Account created. Please verify using the code sent to your phone.',
-      keeper_id: result.rows[0].keeper_id
+      keeper_code: result.rows[0].keeper_code,
+      phone: result.rows[0].phone
     });
 
   } catch (err) {
@@ -47,29 +51,34 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// GET: Get current shopkeeper's profile
-router.get('/single', async (req, res) => {
-  const shopkeeperId = req.shop.keeper_id;
+// GET: Get a single shopkeeper by keeper_code
+router.get('/:keeper_code',  authenticateShop, async (req, res) => {
+  const { keeper_code } = req.params;
+
+  if (!keeper_code) {
+    return res.status(400).json({ error: 'Shopkeeper code is required' });
+  }
 
   try {
     const result = await pool.query(
       `SELECT 
-         k.keeper_id,
+         k.keeper_code,
          k.first_name,
          k.last_name,
          k.phone,
          k.email,
-         k.role,
          k.is_active,
+         k.created_at AS keeper_created_at,
          s.shop_id,
          s.name AS shop_name,
          s.phone AS shop_phone,
          s.email AS shop_email,
-         s.address AS shop_address
+         s.address AS shop_address,
+         s.created_at AS shop_created_at
        FROM shopkeepers k
        LEFT JOIN shops s ON k.shop_id = s.shop_id
-       WHERE k.keeper_id = $1`,
-      [shopkeeperId]
+       WHERE k.keeper_code = $1`,
+      [keeper_code]
     );
 
     if (result.rows.length === 0) {
@@ -79,46 +88,68 @@ router.get('/single', async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Error fetching shopkeeper:', err);
-    res.status(500).json({ error: 'Could not fetch profile' });
+    res.status(500).json({ error: 'Could not fetch shopkeeper' });
+  }
+});
+
+// GET /api/v1/shopkeepers?phone=+254712345678
+router.get('/',  authenticateShop, async (req, res) => {
+  const { phone } = req.query;
+
+  let queryText = `
+    SELECT k.keeper_code, k.first_name, k.last_name, k.phone, s.name AS shop_name
+    FROM shopkeepers k
+    LEFT JOIN shops s ON k.shop_id = s.shop_id
+  `;
+  const values = [];
+
+  if (phone) {
+    queryText += ' WHERE k.phone = $1';
+    values.push(phone);
+  } else {
+    queryText += ' ORDER BY k.first_name';
+  }
+
+  try {
+    const result = await pool.query(queryText, values);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not fetch shopkeepers' });
   }
 });
 
 // GET: Get all shopkeepers (owner-only)
-router.get('/', async (req, res) => {
-  const requestingRole = req.shop.role;
-  const shopId = req.shop.shop_id;
-
-  // 🔒 Only 'owner' can view all shopkeepers
-  if (requestingRole !== 'owner') {
-    return res.status(403).json({ error: 'Access denied. Owners only.' });
-  }
-
+router.get('/', authenticateShop,  async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT 
-         keeper_id,
-         first_name,
-         last_name,
-         phone,
-         email,
-         role,
-         is_active,
-         created_at
-       FROM shopkeepers
-       WHERE shop_id = $1
-       ORDER BY role, first_name`,
-      [shopId]
-    );
+    const result = await pool.query(`
+      SELECT 
+        k.keeper_code,
+        k.first_name,
+        k.last_name,
+        k.phone,
+        k.email,
+        k.is_active,
+        k.created_at AS keeper_created_at,
+        s.shop_id,
+        s.name AS shop_name,
+        s.phone AS shop_phone,
+        s.email AS shop_email,
+        s.address AS shop_address,
+        s.created_at AS shop_created_at
+      FROM shopkeepers k
+      LEFT JOIN shops s ON k.shop_id = s.shop_id
+      ORDER BY s.name NULLS FIRST, k.first_name
+    `);
 
     res.json(result.rows);
   } catch (err) {
-    console.error('Error fetching shopkeepers:', err);
+    console.error('Error fetching all shopkeepers:', err);
     res.status(500).json({ error: 'Could not fetch shopkeepers' });
   }
 });
 
 // POST: Verify account
-router.post('/verify', async (req, res) => {
+router.post('/verify', authenticateShop, async (req, res) => {
   const { phone, code } = req.body;
 
   try {
@@ -142,14 +173,19 @@ router.post('/verify', async (req, res) => {
 });
 
 // POST: Login
-router.post('/login', async (req, res) => {
+router.post('/login', authenticateShop, async (req, res) => {
   const { phone, password } = req.body;
 
   try {
     const result = await pool.query(
       `SELECT 
-         k.keeper_id, k.first_name, k.role, k.is_active,
-         s.shop_id, s.name AS shop_name, s.api_key
+         k.keeper_code,
+         k.first_name,
+         k.is_active,
+         k.password_hash,           -- ✅ ADD THIS LINE
+         s.shop_id,
+         s.name AS shop_name,
+         s.api_key
        FROM shopkeepers k
        LEFT JOIN shops s ON k.shop_id = s.shop_id
        WHERE k.phone = $1`,
@@ -161,6 +197,8 @@ router.post('/login', async (req, res) => {
     }
 
     const user = result.rows[0];
+
+    // 🔐 Now this will work because password_hash is included
     const isValid = await bcrypt.compare(password, user.password_hash);
 
     if (!isValid) {
@@ -172,9 +210,8 @@ router.post('/login', async (req, res) => {
     }
 
     res.json({
-      keeper_id: user.keeper_id,
+      keeper_code: user.keeper_code,
       first_name: user.first_name,
-      role: user.role,
       shop_id: user.shop_id || null,
       shop_name: user.shop_name || null,
       api_key: user.api_key || null
@@ -185,4 +222,4 @@ router.post('/login', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = router; 

@@ -1,7 +1,5 @@
 // middleware/auth.js
-const { Pool } = require('pg');
 const pool = require('../models/db');
-require('dotenv').config();
 
 const authenticateShop = async (req, res, next) => {
   const apiKey = req.headers['x-api-key'];
@@ -11,12 +9,21 @@ const authenticateShop = async (req, res, next) => {
   }
 
   try {
-    const result = await pool.query('SELECT * FROM shops WHERE api_key = $1', [apiKey]);
+    const result = await pool.query(
+      `SELECT 
+         s.*,
+         k.keeper_code
+       FROM shops s
+       JOIN shopkeepers k ON s.shop_id = k.shop_id
+       WHERE s.api_key = $1`,
+      [apiKey]
+    );
+
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid API Key' });
     }
 
-    req.shop = result.rows[0]; // Attach shop info to request
+    req.shop = result.rows[0]; // now includes shop + keeper_code
     next();
   } catch (err) {
     console.error(err);

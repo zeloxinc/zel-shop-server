@@ -4,8 +4,7 @@ const router = express.Router();
 const pool = require('../models/db');
 const { authenticateShop } = require('../middleware/auth');
 
-// 🔐 All routes require authentication
-router.use(authenticateShop);
+// 🔐 ALL routes require authentication
 
 // GET: Get all products + variants for this shop
 router.get('/', async (req, res) => {
@@ -65,8 +64,58 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET: Get single product with variants
+router.get('/:type_id', authenticateShop, async (req, res) => {
+  const { type_id } = req.params;
+  const shopId = req.shop.shop_id;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        pt.type_id, pt.name, pt.brand, pt.category, pt.description,
+        pv.variant_id, pv.size, pv.size_unit, pv.unit AS sell_unit,
+        pv.price_per_unit, pv.current_stock, pv.barcode
+      FROM product_types pt
+      LEFT JOIN product_variants pv ON pt.type_id = pv.type_id
+      WHERE pt.type_id = $1 AND pt.shop_id = $2
+    `, [type_id, shopId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const product = {
+      type_id: result.rows[0].type_id,
+      name: result.rows[0].name,
+      brand: result.rows[0].brand,
+      category: result.rows[0].category,
+      description: result.rows[0].description,
+      variants: []
+    };
+
+    result.rows.forEach(row => {
+      if (row.variant_id) {
+        product.variants.push({
+          variant_id: row.variant_id,
+          size: row.size,
+          size_unit: row.size_unit,
+          sell_unit: row.sell_unit,
+          price_per_unit: row.price_per_unit,
+          current_stock: row.current_stock,
+          barcode: row.barcode
+        });
+      }
+    });
+
+    res.json(product);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not fetch product' });
+  }
+});
+
 // POST: Create a new product type
-router.post('/', async (req, res) => {
+router.post('/', authenticateShop, async (req, res) => {
   const { name, brand, category, description } = req.body;
   const shopId = req.shop.shop_id;
 
@@ -90,7 +139,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT: Update a product type
-router.put('/:type_id', async (req, res) => {
+router.put('/:type_id', authenticateShop, async (req, res) => {
   const { type_id } = req.params;
   const { name, brand, category, description } = req.body;
   const shopId = req.shop.shop_id;
@@ -116,7 +165,7 @@ router.put('/:type_id', async (req, res) => {
 });
 
 // POST: Add a new variant
-router.post('/:type_id/variants', async (req, res) => {
+router.post('/:type_id/variants', authenticateShop, async (req, res) => {
   const { type_id } = req.params;
   const { size, size_unit, unit, price_per_unit, current_stock, barcode } = req.body;
   const shopId = req.shop.shop_id;
@@ -142,7 +191,7 @@ router.post('/:type_id/variants', async (req, res) => {
 });
 
 // PUT: Update a variant
-router.put('/variants/:variant_id', async (req, res) => {
+router.put('/variants/:variant_id', authenticateShop, async (req, res) => {
   const { variant_id } = req.params;
   const { size, size_unit, unit, price_per_unit, current_stock, barcode } = req.body;
   const shopId = req.shop.shop_id;
@@ -165,6 +214,55 @@ router.put('/variants/:variant_id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not update variant' });
+  }
+});
+
+
+// DELETE: Delete a variant
+router.delete('/variants/:variant_id', authenticateShop, async (req, res) => {
+  const { variant_id } = req.params;
+  const shopId = req.shop.shop_id;
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM product_variants
+       WHERE variant_id = $1 AND shop_id = $2
+       RETURNING *`,
+      [variant_id, shopId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Variant not found or access denied' });
+    }
+
+    res.json({ message: 'Variant deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not delete variant' });
+  }
+});
+
+// DELETE: Delete a product type (and its variants via CASCADE)
+router.delete('/:type_id', authenticateShop, async (req, res) => {
+  const { type_id } = req.params;
+  const shopId = req.shop.shop_id;
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM product_types
+       WHERE type_id = $1 AND shop_id = $2
+       RETURNING *`,
+      [type_id, shopId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found or access denied' });
+    }
+
+    res.json({ message: 'Product deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not delete product' });
   }
 });
 
