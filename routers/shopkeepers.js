@@ -9,7 +9,7 @@ const { authenticateShop } = require('../middleware/auth')
 // routes/shopkeepers.js
 const { generateKeeperCode } = require('../utils/generatedId');
 
-router.post('/signup', authenticateShop, async (req, res) => {
+router.post('/signup', async (req, res) => {
   const { first_name, last_name, phone, email, password } = req.body;
 
   if (!first_name || !phone || !password) {
@@ -92,8 +92,9 @@ router.get('/:keeper_code',  authenticateShop, async (req, res) => {
   }
 });
 
+// for admin use only
 // GET /api/v1/shopkeepers?phone=+254712345678
-router.get('/',  authenticateShop, async (req, res) => {
+router.get('/',  async (req, res) => {
   const { phone } = req.query;
 
   let queryText = `
@@ -118,6 +119,7 @@ router.get('/',  authenticateShop, async (req, res) => {
   }
 });
 
+// for admin use only
 // GET: Get all shopkeepers (owner-only)
 router.get('/', authenticateShop,  async (req, res) => {
   try {
@@ -148,44 +150,122 @@ router.get('/', authenticateShop,  async (req, res) => {
   }
 });
 
-// POST: Verify account
-router.post('/verify', authenticateShop, async (req, res) => {
-  const { phone, code } = req.body;
+// after MPesa confermation
+// POST: Verify account and create shop
+router.post('/verify', async (req, res) => {
+  const { phone, code, shop } = req.body;
+
+  // Validate required fields
+  if (!phone || !code) {
+    return res.status(400).json({ error: 'Phone and verification code are required' });
+  }
+
+  if (!shop || !shop.name) {
+    return res.status(400).json({ error: 'Shop name is required to create your shop' });
+  }
+
+  const { name, phone: shopPhone, email: shopEmail, address } = shop;
 
   try {
-    const result = await pool.query(
-      `UPDATE shopkeepers
-       SET is_verified = TRUE, is_active = TRUE
-       WHERE phone = $1 AND activation_code = $2 AND is_verified = FALSE
-       RETURNING keeper_id, first_name, phone`,
+    await pool.query('BEGIN');
+
+    // Step 1: Find unverified shopkeeper
+    const keeperResult = await pool.query(
+      `SELECT keeper_id, first_name, last_name, email AS keeper_email, keeper_code
+       FROM shopkeepers
+       WHERE phone = $1 AND activation_code = $2::uuid AND is_verified = FALSE`,
       [phone, code]
     );
 
-    if (result.rows.length === 0) {
+    if (keeperResult.rows.length === 0) {
+      await pool.query('ROLLBACK');
       return res.status(400).json({ error: 'Invalid or expired code' });
     }
 
-    res.json({ message: 'Account verified successfully' });
+    const shopkeeper = keeperResult.rows[0];
+
+    // Step 2: Generate secure API key
+    const apiKey = 'live_' + uuidv4();
+
+    // Step 3: Create the shop with user-provided details
+    const shopResult = await pool.query(
+      `INSERT INTO shops (name, phone, email, address, api_key)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING shop_id, name, phone, email, address, api_key, created_at`,
+      [name, shopPhone || phone, shopEmail, address, apiKey]  // Use keeper's phone if no shop phone
+    );
+
+    const createdShop = shopResult.rows[0];
+
+    // Step 4: Link shopkeeper to the new shop and mark as verified & active
+    await pool.query(
+      `UPDATE shopkeepers
+       SET 
+         shop_id = $1,
+         is_verified = TRUE,
+         is_active = TRUE
+       WHERE phone = $2`,
+      [createdShop.shop_id, phone]
+    );
+
+    await pool.query('COMMIT');
+
+    // ✅ Success: Return complete response
+    res.json({
+      message: 'Account verified and shop created successfully!',
+      shopkeeper: {
+        keeper_code: shopkeeper.keeper_code,
+        first_name: shopkeeper.first_name,
+        last_name: shopkeeper.last_name,
+        phone: phone,
+        email: shopkeeper.keeper_email,
+        is_verified: true,
+        is_active: true
+      },
+      shop: createdShop
+    });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Verification failed' });
+    await pool.query('ROLLBACK');
+    
+    // Handle unique constraint errors (e.g., duplicate email or phone)
+    if (err.constraint) {
+      if (err.constraint.includes('shops_phone_key')) {
+        return res.status(400).json({ error: 'A shop with this phone number already exists' });
+      }
+      if (err.constraint.includes('shops_email_key')) {
+        return res.status(400).json({ error: 'A shop with this email already exists' });
+      }
+    }
+
+    console.error('Verification error:', err);
+    res.status(500).json({ error: 'Verification failed. Please try again.' });
   }
 });
 
-// POST: Login
-router.post('/login', authenticateShop, async (req, res) => {
+// POST: Login 
+router.post('/login', async (req, res) => {
   const { phone, password } = req.body;
 
   try {
     const result = await pool.query(
       `SELECT 
+         k.keeper_id,
          k.keeper_code,
          k.first_name,
+         k.last_name,
+         k.phone,
+         k.email,
+         k.password_hash,
+         k.is_verified,
          k.is_active,
-         k.password_hash,           -- ✅ ADD THIS LINE
          s.shop_id,
          s.name AS shop_name,
-         s.api_key
+         s.phone AS shop_phone,
+         s.email AS shop_email,
+         s.address AS shop_address,
+         s.api_key,
+         s.created_at AS shop_created_at
        FROM shopkeepers k
        LEFT JOIN shops s ON k.shop_id = s.shop_id
        WHERE k.phone = $1`,
@@ -198,26 +278,39 @@ router.post('/login', authenticateShop, async (req, res) => {
 
     const user = result.rows[0];
 
-    // 🔐 Now this will work because password_hash is included
+    // 🔐 Check password
     const isValid = await bcrypt.compare(password, user.password_hash);
-
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    if (!user.is_active) {
-      return res.status(403).json({ error: 'Account not active' });
-    }
 
+
+    // ✅ Fully verified — return full data
     res.json({
-      keeper_code: user.keeper_code,
-      first_name: user.first_name,
-      shop_id: user.shop_id || null,
-      shop_name: user.shop_name || null,
-      api_key: user.api_key || null
+      message: 'Login successful',
+      is_verified: true,
+      shopkeeper: {
+        keeper_code: user.keeper_code,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        phone: user.phone,
+        email: user.email,
+        is_verified: true,
+        role: user.role
+      },
+      shop: {
+        shop_id: user.shop_id,
+        name: user.shop_name,
+        phone: user.shop_phone,
+        email: user.shop_email,
+        address: user.shop_address,
+        api_key: user.api_key,
+        created_at: user.shop_created_at
+      }
     });
   } catch (err) {
-    console.error(err);
+    console.error('Login error:', err);
     res.status(500).json({ error: 'Login failed' });
   }
 });

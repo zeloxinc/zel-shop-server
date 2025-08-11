@@ -232,3 +232,4 @@ ALTER TABLE shopkeepers ALTER COLUMN keeper_code DROP DEFAULT;
 
 
 SELECT * FROM shopkeepers
+SELECT * FROM shops
