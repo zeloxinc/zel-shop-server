@@ -233,3 +233,29 @@ ALTER TABLE shopkeepers ALTER COLUMN keeper_code DROP DEFAULT;
 
 SELECT * FROM shopkeepers
 SELECT * FROM shops
+SELECT * FROM product_types
+SELECT * FROM product_variants
+
+
+
+-- Add soft delete columns
+ALTER TABLE product_types ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+
+-- Ensure unique size per product
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM pg_constraint 
+        WHERE conname = 'uk_type_size'
+          AND conrelid = 'product_variants'::regclass
+    ) THEN
+        ALTER TABLE product_variants 
+        ADD CONSTRAINT uk_type_size UNIQUE (type_id, size, size_unit);
+    END IF;
+END $$;
+
+-- Index for soft delete
+CREATE INDEX IF NOT EXISTS idx_product_types_active ON product_types(shop_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_product_variants_active ON product_variants(type_id, is_active);
