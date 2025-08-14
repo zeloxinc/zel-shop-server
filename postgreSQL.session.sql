@@ -235,9 +235,11 @@ SELECT * FROM shopkeepers
 SELECT * FROM shops
 SELECT * FROM product_types
 SELECT * FROM product_variants
+SELECT * FROM sales
 
 DELETE  FROM product_variants;
 DELETE  FROM product_types;
+DELETE  FROM sales
 
 
 
