@@ -70,10 +70,13 @@ async function variantExistsInShop(variantId, shopId) {
   return result.rows.length > 0;
 }
 
-
 // PUBLIC / ADMIN: Get products by shop_id (no auth needed)
 // Query: /products?shop_id=1&q=bread&category=Bakery&page=1&limit=20
 router.get('/', async (req, res) => {
+
+  res.set('Cache-Control', 'no-store');
+  res.removeHeader('ETag');
+
   const {
     shop_id: rawShopId,
     q,
@@ -282,7 +285,6 @@ router.post('/', authenticateShop, validateCreateProduct, async (req, res) => {
        RETURNING type_id`,
       [shopId, name, brand, category, description]
     );
-
     const typeId = productResult.rows[0].type_id;
 
     // Insert variants if provided

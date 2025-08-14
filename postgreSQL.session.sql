@@ -236,6 +236,9 @@ SELECT * FROM shops
 SELECT * FROM product_types
 SELECT * FROM product_variants
 
+DELETE  FROM product_variants;
+DELETE  FROM product_types;
+
 
 
 -- Add soft delete columns
