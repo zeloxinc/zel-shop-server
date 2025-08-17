@@ -10,6 +10,7 @@ const productRoutes = require('./routers/products');
 const shopkeeperRoutes = require('./routers/shopkeepers');
 const shopRoutes = require('./routers/shops');
 const saleRoutes = require('./routers/sales');
+const payment = require('./routers/payment')
 
 // Create app
 const app = express();
@@ -25,6 +26,7 @@ app.use('/api/v1/products', productRoutes);
 app.use('/api/v1/shopkeepers', shopkeeperRoutes);
 app.use('/api/v1/shops', shopRoutes);
 app.use('/api/v1/sales', saleRoutes);
+app.use('/api/v1/payment', payment);
 
 // Port
 const PORT = process.env.PORT || 5000;

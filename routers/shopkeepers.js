@@ -9,6 +9,7 @@ const { authenticateShop } = require('../middleware/auth')
 // routes/shopkeepers.js
 const { generateKeeperCode } = require('../utils/generatedId');
 
+// POST /signup
 router.post('/signup', async (req, res) => {
   const { first_name, last_name, phone, email, password } = req.body;
 
@@ -17,26 +18,23 @@ router.post('/signup', async (req, res) => {
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
-  const activationCode = uuidv4();
-  const keeperCode = generateKeeperCode(); // e.g., SK25A7X9C2M
+  const keeperCode = generateKeeperCode();
 
   try {
     await pool.query('BEGIN');
 
-    const result = await pool.query(  
+    const result = await pool.query(
       `INSERT INTO shopkeepers 
-         (keeper_code, first_name, last_name, phone, email, password_hash, activation_code, is_active, is_verified)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (keeper_code, first_name, last_name, phone, email, password_hash, is_active, is_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING keeper_code, first_name, phone, email`,
-      [keeperCode, first_name, last_name, phone, email, hashedPassword, activationCode, false, false]
+      [keeperCode, first_name, last_name, phone, email, hashedPassword, false, false]
     );
 
     await pool.query('COMMIT');
 
-    console.log(`Activation code for ${phone}: ${activationCode}`);
-
     res.status(201).json({
-      message: 'Account created. Please verify using the code sent to your phone.',
+      message: 'Account created. Please choose a plan to activate.',
       keeper_code: result.rows[0].keeper_code,
       phone: result.rows[0].phone
     });
@@ -150,96 +148,65 @@ router.get('/', authenticateShop,  async (req, res) => {
   }
 });
 
-// after MPesa confermation
-// POST: Verify account and create shop
+// POST /verify
 router.post('/verify', async (req, res) => {
-  const { phone, code, shop } = req.body;
+  const { phone, code } = req.body;
 
-  // Validate required fields
   if (!phone || !code) {
-    return res.status(400).json({ error: 'Phone and verification code are required' });
+    return res.status(400).json({ error: 'Phone and code required' });
   }
-
-  if (!shop || !shop.name) {
-    return res.status(400).json({ error: 'Shop name is required to create your shop' });
-  }
-
-  const { name, phone: shopPhone, email: shopEmail, address } = shop;
 
   try {
-    await pool.query('BEGIN');
+    const client = await pool.connect();
+    await client.query('BEGIN');
 
-    // Step 1: Find unverified shopkeeper
-    const keeperResult = await pool.query(
-      `SELECT keeper_id, first_name, last_name, email AS keeper_email, keeper_code
-       FROM shopkeepers
-       WHERE phone = $1 AND activation_code = $2::uuid AND is_verified = FALSE`,
+    const result = await client.query(
+      `SELECT 
+         s.keeper_id, s.first_name, s.last_name, s.email, s.keeper_code,
+         s.shop_id, s.due_date, s.plan_type,
+         sh.name, sh.phone, sh.email, sh.address, sh.api_key
+       FROM shopkeepers s
+       LEFT JOIN shops sh ON s.shop_id = sh.shop_id
+       WHERE s.phone = $1 AND s.activation_code = $2::uuid
+         AND s.is_active = TRUE AND s.due_date > NOW()`,
       [phone, code]
     );
 
-    if (keeperResult.rows.length === 0) {
-      await pool.query('ROLLBACK');
-      return res.status(400).json({ error: 'Invalid or expired code' });
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Invalid, expired, or inactive code' });
     }
 
-    const shopkeeper = keeperResult.rows[0];
+    const user = result.rows[0];
+    await client.query('COMMIT');
 
-    // Step 2: Generate secure API key
-    const apiKey = 'live_' + uuidv4();
-
-    // Step 3: Create the shop with user-provided details
-    const shopResult = await pool.query(
-      `INSERT INTO shops (name, phone, email, address, api_key)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING shop_id, name, phone, email, address, api_key, created_at`,
-      [name, shopPhone || phone, shopEmail, address, apiKey]  // Use keeper's phone if no shop phone
-    );
-
-    const createdShop = shopResult.rows[0];
-
-    // Step 4: Link shopkeeper to the new shop and mark as verified & active
-    await pool.query(
-      `UPDATE shopkeepers
-       SET 
-         shop_id = $1,
-         is_verified = TRUE,
-         is_active = TRUE
-       WHERE phone = $2`,
-      [createdShop.shop_id, phone]
-    );
-
-    await pool.query('COMMIT');
-
-    // ✅ Success: Return complete response
     res.json({
-      message: 'Account verified and shop created successfully!',
+      message: 'Verified and active!',
       shopkeeper: {
-        keeper_code: shopkeeper.keeper_code,
-        first_name: shopkeeper.first_name,
-        last_name: shopkeeper.last_name,
-        phone: phone,
-        email: shopkeeper.keeper_email,
+        keeper_code: user.keeper_code,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        phone,
+        email: user.email,
         is_verified: true,
         is_active: true
       },
-      shop: createdShop
+      shop: user.shop_id ? {
+        shop_id: user.shop_id,
+        name: user.name,
+        phone: user.phone,
+        email: user.email,
+        address: user.address,
+        api_key: user.api_key,
+        created_at: user.created_at
+      } : null
     });
 
   } catch (err) {
-    await pool.query('ROLLBACK');
-    
-    // Handle unique constraint errors (e.g., duplicate email or phone)
-    if (err.constraint) {
-      if (err.constraint.includes('shops_phone_key')) {
-        return res.status(400).json({ error: 'A shop with this phone number already exists' });
-      }
-      if (err.constraint.includes('shops_email_key')) {
-        return res.status(400).json({ error: 'A shop with this email already exists' });
-      }
-    }
-
-    console.error('Verification error:', err);
-    res.status(500).json({ error: 'Verification failed. Please try again.' });
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: 'Verification failed' });
+  } finally {
+    client.release();
   }
 });
 

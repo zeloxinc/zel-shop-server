@@ -240,6 +240,8 @@ SELECT * FROM sales
 DELETE  FROM product_variants;
 DELETE  FROM product_types;
 DELETE  FROM sales
+DELETE  FROM shopkeepers
+DELETE  FROM shops
 
 
 
@@ -264,3 +266,8 @@ END $$;
 -- Index for soft delete
 CREATE INDEX IF NOT EXISTS idx_product_types_active ON product_types(shop_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_product_variants_active ON product_variants(type_id, is_active);
+
+
+ALTER TABLE shopkeepers
+ADD COLUMN due_date TIMESTAMPTZ,
+ADD COLUMN plan_type VARCHAR(10);-- 'daily', 'weekly', 'monthly'
