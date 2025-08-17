@@ -43,7 +43,7 @@ router.post('/', authenticateShop, async (req, res) => {
 
     // Step 3: Link shopkeeper to this new shop
     await pool.query(
-      `UPDATE shopkeepers
+      `UPDATE shopkeepers 
        SET shop_id = $1
        WHERE keeper_code = $2`,
       [shopId, keeperCode]

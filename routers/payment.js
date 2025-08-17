@@ -3,22 +3,35 @@ const express = require("express");
 const router = express.Router();
 const request = require("request");
 const { v4: uuidv4 } = require("uuid");
+const { getAccessToken } = require('../middleware/auth');
+const axios = require('axios');
+
+
+
 
 // POST /initiate-activation
 router.post('/initiate-activation', async (req, res) => {
   const { phone, plan } = req.body;
 
-  const plans = {
-    daily: { amount: 10, days: 1 },
-    weekly: { amount: 65, days: 7 },
-    monthly: { amount: 250, days: 30 }
-  };
+    const cleanPhone = phone.replace(/\D/g, ''); 
+    let formattedPhone;
 
+    if (cleanPhone.length === 10 && cleanPhone.startsWith('07')) {
+    formattedPhone = `254${cleanPhone.slice(1)}`;
+    } else if (cleanPhone.length === 9 && cleanPhone.startsWith('7')) {
+    formattedPhone = `254${cleanPhone}`;
+    } else if (cleanPhone.length === 12 && cleanPhone.startsWith('254')) {
+    formattedPhone = cleanPhone;
+    } else {
+    return res.status(400).json({ error: 'Invalid phone number format' });
+    }
+
+  const plans = { daily: 10, weekly: 65, monthly: 250  };
   if (!plans[plan]) {
     return res.status(400).json({ error: 'Invalid plan. Choose: daily, weekly, monthly' });
   }
 
-  const { amount, days } = plans[plan];
+  const amount = plans[plan]; 
 
   try {
     const shopkeeper = await pool.query(
@@ -30,10 +43,13 @@ router.post('/initiate-activation', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // ✅ Get access token
+    const accessToken = await getAccessToken(); // ← Generated here
+
     const orderId = uuidv4();
-    const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+    const timestamp = new Date().toISOString().replace(/[-:.]/g, "").slice(0, 14);
     const password = Buffer.from(
-      process.env.BUSINESS_SHORT_CODE + process.env.PASS_KEY + timestamp
+      process.env.BUSINESS_SHORT_CODE + process.env.MPESA_PASSKEY + timestamp
     ).toString("base64");
 
     // Save temp payment
@@ -43,44 +59,48 @@ router.post('/initiate-activation', async (req, res) => {
       [orderId, phone, amount, plan, 'pending']
     );
 
-    const callback_url = `${process.env.BASE_URL}/api/callback/activation/${orderId}`;
+    const callback_url = `${process.env.BASE_CALLBACK_URL}/api/v1/payment/callback/activation/${orderId}`;
 
-    request({
-      url: "https://8f736cbb2058.ngrok-free.app/stkpush/v1/processrequest",
-      method: "POST",
-      headers: { Authorization: "Bearer " + accessToken }, 
-      json: {
+    const stkResponse = await axios({
+    method: 'POST',
+    url: 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
+    headers: {
+        Authorization: `Bearer ${accessToken}`,
+    },
+    data: {
         BusinessShortCode: process.env.BUSINESS_SHORT_CODE,
         Password: password,
         Timestamp: timestamp,
-        TransactionType: "CustomerPayBillOnline",
+        TransactionType: 'CustomerPayBillOnline',
         Amount: amount,
-        PartyA: phone.replace('+', ''),
+        PartyA: formattedPhone,      // 254711140441
         PartyB: process.env.BUSINESS_SHORT_CODE,
-        PhoneNumber: phone.replace('+', ''),
+        PhoneNumber: formattedPhone, // 254711140441
         CallBackURL: callback_url,
         AccountReference: `ZELSHOP-${plan.toUpperCase()}`,
-        TransactionDesc: `Activate Zelshop - ${plan} plan`
-      }
-    }, (error, response, body) => {
-      if (error || body.ResponseCode !== "0") {
-        pool.query(`UPDATE temp_payments SET status = 'failed' WHERE order_id = $1`, [orderId]);
-        return res.status(500).json({ error: "Payment initiation failed" });
-      }
-
-      res.json({
-        message: "STK push sent",
-        orderId: body.CheckoutRequestID
-      });
+        TransactionDesc: `Activate Zelshop - ${plan} Plan`
+    }
     });
+
+    if (stkResponse.data.ResponseCode === "0") {
+      res.json({
+        message: 'STK push sent',
+        CheckoutRequestID: stkResponse.data.CheckoutRequestID
+      });
+    } else {
+      res.status(400).json({
+        error: 'STK push failed',
+        detail: stkResponse.data.ResponseDescription
+      });
+    }
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: 'Payment initiation failed' });
   }
 });
 
-// POST /callback/activation/:orderId
+// POST /callback/activation/:orderId 
 router.post('/callback/activation/:orderId', async (req, res) => {
   const { orderId } = req.params;
   const resultCode = req.body.Body?.stkCallback?.ResultCode;

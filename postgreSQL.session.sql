@@ -108,6 +108,18 @@ CREATE TABLE sales (
   FOREIGN KEY (variant_id) REFERENCES product_variants(variant_id) ON DELETE CASCADE
 );
 
+
+CREATE TABLE temp_payments (
+  id SERIAL PRIMARY KEY,
+  order_id VARCHAR(255) UNIQUE NOT NULL,
+  phone VARCHAR(15) NOT NULL,
+  amount INTEGER NOT NULL,
+  plan VARCHAR(10) NOT NULL, -- 'daily', 'weekly', 'monthly'
+  status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, completed, failed
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indexes
 CREATE INDEX idx_sales_shop_date ON sales(shop_id, sale_date);
 CREATE INDEX idx_sales_variant ON sales(variant_id);
@@ -236,12 +248,14 @@ SELECT * FROM shops
 SELECT * FROM product_types
 SELECT * FROM product_variants
 SELECT * FROM sales
+SELECT * FROM temp_payments
 
 DELETE  FROM product_variants;
 DELETE  FROM product_types;
 DELETE  FROM sales
 DELETE  FROM shopkeepers
 DELETE  FROM shops
+DELETE  FROM temp_payments
 
 
 
